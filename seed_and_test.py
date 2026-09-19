@@ -1,5 +1,6 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+from sqlalchemy import select
 from app.db.session import AsyncSessionLocal, init_db
 from app.models.enums import (
     AssessmentStatusEnum,
@@ -8,6 +9,7 @@ from app.models.enums import (
     RoleEnum,
     SubmissionStatusEnum,
 )
+from app.models.user import User
 from app.schemas.assessment import AssessmentCreate, AssessmentProblemAdd
 from app.schemas.auth import LoginRequest, SignupRequest
 from app.schemas.common import SortOrderEnum
@@ -17,9 +19,32 @@ from app.schemas.test_case import TestCaseCreate
 from app.services.assessment_service import AssessmentService
 from app.services.auth_service import AuthService
 from app.services.leaderboard_service import LeaderboardService
+from app.services.plagiarism_service import PlagiarismService
 from app.services.problem_service import ProblemService
 from app.services.submission_service import SubmissionService
 from app.services.test_case_service import TestCaseService
+from app.core.security import decode_token, hash_password
+
+
+async def get_or_create_user(db, name: str, email: str, role: RoleEnum):
+    stmt = select(User).where(User.email == email)
+    res = await db.execute(stmt)
+    user = res.scalar_one_or_none()
+    if user:
+        user.password_hash = hash_password("Password123!")
+        user.role = role
+        user.name = name
+        await db.flush()
+        return user
+    return await AuthService.register(
+        db,
+        SignupRequest(
+            name=name,
+            email=email,
+            password="Password123!",
+            role=role,
+        ),
+    )
 
 
 async def main():
@@ -29,61 +54,17 @@ async def main():
 
     async with AsyncSessionLocal() as db:
         print("\n=== 2. Testing Authentication & User Seeding ===")
-        try:
-            admin_user = await AuthService.register(
-                db,
-                SignupRequest(
-                    name="Admin Engineer",
-                    email="admin@assessment.com",
-                    password="Password123!",
-                    role=RoleEnum.ADMIN,
-                ),
-            )
-            print(f"Created Admin: {admin_user.email} (Role: {admin_user.role.value})")
-        except Exception as e:
-            print(f"Admin already exists: {e}")
+        admin_user = await get_or_create_user(db, "Admin Engineer", "admin@assessment.com", RoleEnum.ADMIN)
+        print(f"Created Admin: {admin_user.email} (Role: {admin_user.role.value})")
 
-        try:
-            recruiter_user = await AuthService.register(
-                db,
-                SignupRequest(
-                    name="Lead Recruiter",
-                    email="recruiter@assessment.com",
-                    password="Password123!",
-                    role=RoleEnum.RECRUITER,
-                ),
-            )
-            print(f"Created Recruiter: {recruiter_user.email} (Role: {recruiter_user.role.value})")
-        except Exception as e:
-            print(f"Recruiter already exists: {e}")
+        recruiter_user = await get_or_create_user(db, "Lead Recruiter", "recruiter@assessment.com", RoleEnum.RECRUITER)
+        print(f"Created Recruiter: {recruiter_user.email} (Role: {recruiter_user.role.value})")
 
-        try:
-            cand1 = await AuthService.register(
-                db,
-                SignupRequest(
-                    name="Alice Developer",
-                    email="alice@candidate.com",
-                    password="Password123!",
-                    role=RoleEnum.CANDIDATE,
-                ),
-            )
-            print(f"Created Candidate 1: {cand1.email}")
-        except Exception as e:
-            print(f"Candidate 1 already exists: {e}")
+        cand1 = await get_or_create_user(db, "Alice Developer", "alice@candidate.com", RoleEnum.CANDIDATE)
+        print(f"Created Candidate 1: {cand1.email}")
 
-        try:
-            cand2 = await AuthService.register(
-                db,
-                SignupRequest(
-                    name="Bob Coder",
-                    email="bob@candidate.com",
-                    password="Password123!",
-                    role=RoleEnum.CANDIDATE,
-                ),
-            )
-            print(f"Created Candidate 2: {cand2.email}")
-        except Exception as e:
-            print(f"Candidate 2 already exists: {e}")
+        cand2 = await get_or_create_user(db, "Bob Coder", "bob@candidate.com", RoleEnum.CANDIDATE)
+        print(f"Created Candidate 2: {cand2.email}")
 
         login_res = await AuthService.login(
             db, LoginRequest(email="alice@candidate.com", password="Password123!")
@@ -131,7 +112,7 @@ async def main():
                 score_weight=50,
             ),
         )
-        print(f"Added 2 test cases to Problem 1 (1 sample, 1 hidden).")
+        print("Added 2 test cases to Problem 1 (1 sample, 1 hidden).")
 
         prob2 = await ProblemService.create_problem(
             db,
@@ -163,10 +144,8 @@ async def main():
         recruiter_res = await AuthService.login(
             db, LoginRequest(email="recruiter@assessment.com", password="Password123!")
         )
-        from app.core.security import decode_token
         rec_payload = decode_token(recruiter_res.access_token)
-        from app.models.user import User
-        rec_user = (await db.execute(select_user := select_user_query(rec_payload["sub"]))).scalar_one()
+        rec_user = (await db.execute(select(User).where(User.id == rec_payload["sub"]))).scalar_one()
 
         assessment = await AssessmentService.create_assessment(
             db,
@@ -188,7 +167,7 @@ async def main():
         print(f"Created Assessment: '{assessment.title}' with {len(assessment.problems)} problems.")
 
         print("\n=== 5. Testing Code Execution & Sandbox Engine ===")
-        alice_user = (await db.execute(select_user_query(cand1.id))).scalar_one()
+        alice_user = (await db.execute(select(User).where(User.id == cand1.id))).scalar_one()
         python_correct_code = """
 import sys
 
@@ -221,9 +200,10 @@ if __name__ == '__main__':
         )
         print(f"Alice Submission Status: {sub1.status.value}, Score: {sub1.score}/{sub1.max_score}, Execution Time: {sub1.execution_time_ms}ms")
 
-        bob_user = (await db.execute(select_user_query(cand2.id))).scalar_one()
-        wrong_code = """
-print("wrong output")
+        bob_user = (await db.execute(select(User).where(User.id == cand2.id))).scalar_one()
+        python_wrong_code = """
+import sys
+print("0 0")
 """
         sub2 = await SubmissionService.create_and_evaluate(
             db,
@@ -232,56 +212,78 @@ print("wrong output")
                 problem_id=prob1.id,
                 assessment_id=assessment.id,
                 language=LanguageEnum.PYTHON,
-                code=wrong_code,
+                code=python_wrong_code,
             ),
         )
         print(f"Bob Wrong Answer Status: {sub2.status.value}, Score: {sub2.score}/{sub2.max_score}")
 
-        js_code = """
+        bob_js_code = """
 const fs = require('fs');
-const input = fs.readFileSync(0, 'utf-8').trim();
-const reversed = input.split(' ').reverse().join(' ');
-console.log(reversed);
+
+function solve() {
+    const input = fs.readFileSync(0, 'utf-8').trim().split('\\n');
+    if (input.length < 2) return;
+    const nums = input[0].split(' ').map(Number);
+    const target = Number(input[1]);
+    const map = new Map();
+    for (let i = 0; i < nums.length; i++) {
+        const diff = target - nums[i];
+        if (map.has(diff)) {
+            console.log(map.get(diff) + ' ' + i);
+            return;
+        }
+        map.set(nums[i], i);
+    }
+}
+solve();
 """
-        sub_js = await SubmissionService.create_and_evaluate(
+        sub3 = await SubmissionService.create_and_evaluate(
             db,
             bob_user,
             SubmissionCreate(
-                problem_id=prob2.id,
+                problem_id=prob1.id,
                 assessment_id=assessment.id,
                 language=LanguageEnum.JAVASCRIPT,
-                code=js_code,
+                code=bob_js_code,
             ),
         )
-        print(f"Bob JavaScript Submission Status: {sub_js.status.value}, Score: {sub_js.score}/{sub_js.max_score}, Execution Time: {sub_js.execution_time_ms}ms")
+        print(f"Bob JavaScript Submission Status: {sub3.status.value}, Score: {sub3.score}/{sub3.max_score}, Execution Time: {sub3.execution_time_ms}ms")
 
-        print("\n=== 6. Testing Dry Run (Run Sample Code) ===")
+        print("\n=== 6. Testing Dry Run (Run Sample Code) ====")
         from app.schemas.submission import RunSampleCodeRequest
-        sample_run = await SubmissionService.run_sample(
+        dry_run_res = await SubmissionService.run_sample(
             db,
             RunSampleCodeRequest(
                 problem_id=prob2.id,
                 language=LanguageEnum.PYTHON,
-                code="import sys\nline = sys.stdin.read().strip()\nprint(' '.join(line.split()[::-1]))",
+                code="""
+import sys
+line = sys.stdin.read().strip()
+words = line.split()
+print(" ".join(reversed(words)))
+""",
+                custom_input="hello world",
             ),
         )
-        print(f"Dry Run Result: Status: {sample_run.status.value}, Passed: {sample_run.passed}, Output: '{sample_run.stdout}' (Expected: '{sample_run.expected_output}')")
+        print(f"Dry Run Result: Status: {dry_run_res.status.value}, Passed: {dry_run_res.passed}, Output: '{dry_run_res.stdout.strip()}' (Expected: 'world hello')")
 
         print("\n=== 7. Testing Data Listing, Filtering, and Pagination ===")
-        listed_problems = await ProblemService.list_problems(
+        problems_page = await ProblemService.list_problems(
             db,
-            search="target",
+            search="Indices",
             difficulty=DifficultyEnum.EASY,
+            category=None,
+            is_published=True,
+            sort_by="created_at",
+            sort_order=SortOrderEnum.DESC,
             page=1,
-            page_size=5,
-            sort_by="title",
-            sort_order=SortOrderEnum.ASC,
+            page_size=10,
         )
-        print(f"Problem search result: {len(listed_problems.items)} items found (Total: {listed_problems.total_items})")
+        print(f"Problem search result: {len(problems_page.items)} items found (Total: {problems_page.total_items})")
 
         print("\n=== 8. Testing Real-time Leaderboard ===")
         leaderboard = await LeaderboardService.get_assessment_leaderboard(db, assessment.id)
-        print(f"Leaderboard for '{leaderboard.assessment_title}':")
+        print(f"Leaderboard for '{assessment.title}':")
         for entry in leaderboard.entries:
             print(f"  Rank #{entry.rank}: {entry.candidate_name} | Score: {entry.total_score} | Problems Solved: {entry.problems_solved}")
 
@@ -294,14 +296,13 @@ console.log(reversed);
 
         await AuthService.reset_password(
             db,
-            ResetPasswordRequest(token=reset_token, new_password="NewAlicePassword456!"),
+            ResetPasswordRequest(token=reset_token, new_password="NewSecretPass123!"),
         )
         print("Password reset successfully. Verifying new login...")
-
         new_login = await AuthService.login(
-            db, LoginRequest(email="alice@candidate.com", password="NewAlicePassword456!")
+            db, LoginRequest(email="alice@candidate.com", password="NewSecretPass123!")
         )
-        print(f"Alice successfully logged in with new password! New token issued.")
+        print("Alice successfully logged in with new password! New token issued.")
 
         print("\n=== 10. Testing Admin User Role Update ===")
         from app.schemas.user import UserUpdateRoleRequest
@@ -315,18 +316,18 @@ console.log(reversed);
 import sys
 
 def main_solution():
-    data = sys.stdin.read().strip().split('\\n')
-    if len(data) < 2:
+    raw_input = sys.stdin.read().strip().split('\\n')
+    if len(raw_input) < 2:
         return
-    elements = list(map(int, data[0].split()))
-    goal = int(data[1])
-    hashmap = {}
-    for i, val in enumerate(elements):
-        remainder = goal - val
-        if remainder in hashmap:
-            print(f"{hashmap[remainder]} {i}")
+    array_numbers = list(map(int, raw_input[0].split()))
+    goal_sum = int(raw_input[1])
+    hash_lookup = {}
+    for pos, element in enumerate(array_numbers):
+        complement = goal_sum - element
+        if complement in hash_lookup:
+            print(f"{hash_lookup[complement]} {pos}")
             return
-        hashmap[val] = i
+        hash_lookup[element] = pos
 
 if __name__ == '__main__':
     main_solution()
@@ -342,7 +343,6 @@ if __name__ == '__main__':
             ),
         )
 
-        from app.services.plagiarism_service import PlagiarismService
         plagiarism_report = await PlagiarismService.analyze_assessment(
             db=db,
             assessment_id=assessment.id,
@@ -351,15 +351,12 @@ if __name__ == '__main__':
         print(f"Plagiarism Report for Assessment: '{plagiarism_report['assessment_title']}'")
         print(f"  Pairs Analyzed: {plagiarism_report['total_pairs_analyzed']}, Flagged Suspicious Matches: {plagiarism_report['flagged_cases_count']}")
         for case in plagiarism_report['flagged_pairs']:
-            print(f"  Flagged Match: {case['candidate_1']['name']} vs {case['candidate_2']['name']} on '{case['problem_title']}' -> Similarity: {case['similarity_percentage']} (Risk: {case['risk_level']})")
+            print(f"  Flagged Match: {case['candidate_1']['name']} vs {case['candidate_2']['name']} on '{case['problem_title']}' -> Similarity: {case['similarity_percentage']}% (Risk: {case['risk_level']})")
+
+        await db.commit()
+        print("Database transaction successfully committed to disk.")
 
     print("\n=== End-to-End Verification Complete! All Components Working Perfectly! ===")
-
-
-def select_user_query(user_id: str):
-    from sqlalchemy import select
-    from app.models.user import User
-    return select(User).where(User.id == user_id)
 
 
 if __name__ == "__main__":
