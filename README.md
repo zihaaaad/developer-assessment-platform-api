@@ -94,13 +94,28 @@ A production-grade, asynchronous backend API built with Python, FastAPI, SQLAlch
 
 ---
 
-## 5. Quick Start & Setup
+## 5. Documentation Directory
 
-### 1. Prerequisites
+- **[UNIVERSAL_SYSTEM_SPECIFICATION.md](UNIVERSAL_SYSTEM_SPECIFICATION.md):** Complete architecture design, entity relationship models, AST plagiarism engine mathematical formulation, cross-platform client integration protocols, and production deployment blueprints.
+- **[FRONTEND_INTEGRATION_GUIDE.md](FRONTEND_INTEGRATION_GUIDE.md):** Client integration guide with TypeScript definitions, Axios token refresh interceptors, and UI state flows.
+
+---
+
+## 6. Quick Start & Setup
+
+### Option A: Docker Compose (Recommended)
+```bash
+docker compose up -d --build
+```
+The server will be available at `http://localhost:8000`.
+
+### Option B: Local Environment
+
+#### 1. Prerequisites
 - Python 3.10+ (Tested on Python 3.14)
 - Node.js (for JavaScript code execution sandbox)
 
-### 2. Installation
+#### 2. Installation
 ```bash
 # Create virtual environment
 python -m venv .venv
@@ -115,12 +130,12 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 3. Run Automated Seeding & Verification
+#### 3. Run Automated Seeding & Verification
 ```bash
 python seed_and_test.py
 ```
 
-### 4. Start Development Server
+#### 4. Start Development Server
 ```bash
 python run.py
 ```
@@ -130,7 +145,7 @@ The server will be running at `http://localhost:8000`.
 
 ---
 
-## 6. Default Seed Credentials
+## 7. Default Seed Credentials
 
 | Role | Email | Password |
 | :--- | :--- | :--- |
@@ -138,3 +153,4 @@ The server will be running at `http://localhost:8000`.
 | **Recruiter** | `recruiter@assessment.com` | `Password123!` |
 | **Candidate 1** | `alice@candidate.com` | `Password123!` |
 | **Candidate 2** | `bob@candidate.com` | `Password123!` |
+
